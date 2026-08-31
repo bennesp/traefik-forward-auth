@@ -49,4 +49,6 @@ For example, the first fork release based on Mesosphere `v3.3.0` is
 upstream baseline. Start again at `r1` when adopting a new upstream version.
 
 GitHub Releases build a multi-platform image for `linux/amd64` and
-`linux/arm64`. Deployments should pin the release tag or resulting digest.
+`linux/arm64`. The Dockerfile cross-compiles with BuildKit's `TARGETOS` and
+`TARGETARCH`; it does not emulate ARM with QEMU. Deployments should pin the
+release tag or resulting digest.
