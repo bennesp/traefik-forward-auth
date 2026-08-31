@@ -141,23 +141,42 @@ func (a *Authenticator) MakeNameCookie(r *http.Request, name string) *http.Cooki
 	}
 }
 
-// MakeCSRFCookie creates a CSRF cookie (used during login only)
+const csrfCookieNoncePrefixLength = 6
+
+func (a *Authenticator) csrfCookieName(nonce string) string {
+	return fmt.Sprintf("%s_%s", a.config.CSRFCookieName, nonce[:csrfCookieNoncePrefixLength])
+}
+
+// MakeCSRFCookie creates a CSRF cookie (used during login only).
+//
+// Each OAuth flow gets its own cookie name so concurrent authentication
+// requests cannot overwrite one another. Incomplete flows expire quickly to
+// avoid leaving stale transaction cookies for the full session lifetime.
 func (a *Authenticator) MakeCSRFCookie(r *http.Request, nonce string) *http.Cookie {
 	return &http.Cookie{
-		Name:     a.config.CSRFCookieName,
+		Name:     a.csrfCookieName(nonce),
 		Value:    nonce,
 		Path:     "/",
 		Domain:   a.csrfCookieDomain(r),
 		HttpOnly: true,
 		Secure:   !a.config.InsecureCookie,
-		Expires:  a.config.CookieExpiry(),
+		Expires:  time.Now().Local().Add(time.Hour),
 	}
 }
 
-// ClearCSRFCookie clears the csrf cookie
-func (a *Authenticator) ClearCSRFCookie(r *http.Request) *http.Cookie {
+// FindCSRFCookie finds the transaction cookie identified by the OAuth state.
+func (a *Authenticator) FindCSRFCookie(r *http.Request, state string) (*http.Cookie, error) {
+	if err := ValidateCSRFState(state); err != nil {
+		return nil, err
+	}
+
+	return r.Cookie(a.csrfCookieName(state))
+}
+
+// ClearCSRFCookie clears the CSRF cookie for one completed OAuth flow.
+func (a *Authenticator) ClearCSRFCookie(r *http.Request, c *http.Cookie) *http.Cookie {
 	return &http.Cookie{
-		Name:     a.config.CSRFCookieName,
+		Name:     c.Name,
 		Value:    "",
 		Path:     "/",
 		Domain:   a.csrfCookieDomain(r),
@@ -167,16 +186,13 @@ func (a *Authenticator) ClearCSRFCookie(r *http.Request) *http.Cookie {
 	}
 }
 
-// ValidateCSRFCookie validates the csrf cookie against state
-func ValidateCSRFCookie(r *http.Request, c *http.Cookie) (bool, string, error) {
-	state := r.URL.Query().Get("state")
-
+// ValidateCSRFCookie validates the CSRF cookie against OAuth state.
+func ValidateCSRFCookie(c *http.Cookie, state string) (bool, string, error) {
 	if len(c.Value) != 32 {
 		return false, "", errors.New("Invalid CSRF cookie value")
 	}
-
-	if len(state) < 34 {
-		return false, "", errors.New("Invalid CSRF state value")
+	if err := ValidateCSRFState(state); err != nil {
+		return false, "", err
 	}
 
 	// Check nonce match
@@ -186,6 +202,15 @@ func ValidateCSRFCookie(r *http.Request, c *http.Cookie) (bool, string, error) {
 
 	// Valid, return redirect
 	return true, state[33:], nil
+}
+
+// ValidateCSRFState checks that state contains a nonce and redirect target.
+func ValidateCSRFState(state string) error {
+	if len(state) < 34 {
+		return errors.New("Invalid CSRF state value")
+	}
+
+	return nil
 }
 
 // GenerateNonce generates a random nonce string
