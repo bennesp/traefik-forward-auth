@@ -1,14 +1,14 @@
 package authentication
 
 import (
-	"fmt"
-	"github.com/mesosphere/traefik-forward-auth/internal/configuration"
-	"github.com/mesosphere/traefik-forward-auth/internal/util"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/mesosphere/traefik-forward-auth/internal/configuration"
+	"github.com/mesosphere/traefik-forward-auth/internal/util"
 )
 
 var (
@@ -156,26 +156,32 @@ func TestAuthMakeCSRFCookie(t *testing.T) {
 
 	// No cookie domain or auth url
 	c := a.MakeCSRFCookie(r, "12345678901234567890123456789012")
+	assert.Equal("_forward_auth_csrf_123456", c.Name)
 	assert.Equal("app.example.com", c.Domain)
+	assert.WithinDuration(time.Now().Add(time.Hour), c.Expires, time.Second)
 
 	// With cookie domain but no auth url
 	config.CookieDomains = []util.CookieDomain{*util.NewCookieDomain("example.com")}
-	c = a.MakeCSRFCookie(r, "12345678901234567890123456789012")
+	c = a.MakeCSRFCookie(r, "22345678901234567890123456789012")
+	assert.Equal("_forward_auth_csrf_223456", c.Name)
 	assert.Equal("app.example.com", c.Domain)
 
 	// With cookie domain and auth url
 	config.AuthHost = "auth.example.com"
 	config.CookieDomains = []util.CookieDomain{*util.NewCookieDomain("example.com")}
-	c = a.MakeCSRFCookie(r, "12345678901234567890123456789012")
+	c = a.MakeCSRFCookie(r, "32345678901234567890123456789012")
+	assert.Equal("_forward_auth_csrf_323456", c.Name)
 	assert.Equal("example.com", c.Domain)
 }
 
 func TestAuthClearCSRFCookie(t *testing.T) {
+	assert := assert.New(t)
 	config := getConfigWithLifetime()
 	a := NewAuthenticator(config)
 	r, _ := http.NewRequest("GET", "http://example.com", nil)
 
-	c := a.ClearCSRFCookie(r)
+	c := a.ClearCSRFCookie(r, &http.Cookie{Name: "_forward_auth_csrf_123456"})
+	assert.Equal("_forward_auth_csrf_123456", c.Name)
 	if c.Value != "" {
 		t.Error("ClearCSRFCookie should create cookie with empty value")
 	}
@@ -185,44 +191,66 @@ func TestAuthValidateCSRFCookie(t *testing.T) {
 	assert := assert.New(t)
 
 	c := &http.Cookie{}
-
-	newCsrfRequest := func(state string) *http.Request {
-		u := fmt.Sprintf("http://example.com?state=%s", state)
-		r, _ := http.NewRequest("GET", u, nil)
-		return r
-	}
+	state := ""
 
 	// Should require 32 char string
-	r := newCsrfRequest("")
 	c.Value = ""
-	valid, _, err := ValidateCSRFCookie(r, c)
+	valid, _, err := ValidateCSRFCookie(c, state)
 	assert.False(valid)
 	if assert.Error(err) {
 		assert.Equal("Invalid CSRF cookie value", err.Error())
 	}
 	c.Value = "123456789012345678901234567890123"
-	valid, _, err = ValidateCSRFCookie(r, c)
+	valid, _, err = ValidateCSRFCookie(c, state)
 	assert.False(valid)
 	if assert.Error(err) {
 		assert.Equal("Invalid CSRF cookie value", err.Error())
 	}
 
-	// Should require valid state
-	r = newCsrfRequest("12345678901234567890123456789012:")
-	c.Value = "12345678901234567890123456789012"
-	valid, _, err = ValidateCSRFCookie(r, c)
-	assert.False(valid)
-	if assert.Error(err) {
-		assert.Equal("Invalid CSRF state value", err.Error())
-	}
-
 	// Should allow valid state
-	r = newCsrfRequest("12345678901234567890123456789012:99")
+	state = "12345678901234567890123456789012:99"
 	c.Value = "12345678901234567890123456789012"
-	valid, state, err := ValidateCSRFCookie(r, c)
+	valid, redirect, err := ValidateCSRFCookie(c, state)
 	assert.True(valid, "valid request should return valid")
 	assert.Nil(err, "valid request should not return an error")
-	assert.Equal("99", state, "valid request should return correct state")
+	assert.Equal("99", redirect, "valid request should return correct redirect")
+}
+
+func TestAuthConcurrentCSRFCookies(t *testing.T) {
+	assert := assert.New(t)
+	config := getConfigWithLifetime()
+	a := NewAuthenticator(config)
+	r, _ := http.NewRequest("GET", "http://auth.example.com", nil)
+	r.Header.Add("X-Forwarded-Host", "auth.example.com")
+
+	firstNonce := "11111178901234567890123456789012"
+	secondNonce := "22222278901234567890123456789012"
+	first := a.MakeCSRFCookie(r, firstNonce)
+	second := a.MakeCSRFCookie(r, secondNonce)
+
+	assert.NotEqual(first.Name, second.Name)
+	r.AddCookie(first)
+	r.AddCookie(second)
+
+	foundSecond, err := a.FindCSRFCookie(r, secondNonce+":https://app.example.com/second")
+	assert.NoError(err)
+	assert.Equal(second.Value, foundSecond.Value)
+
+	foundFirst, err := a.FindCSRFCookie(r, firstNonce+":https://app.example.com/first")
+	assert.NoError(err)
+	assert.Equal(first.Value, foundFirst.Value)
+}
+
+func TestValidateCSRFState(t *testing.T) {
+	assert := assert.New(t)
+	assert.EqualError(ValidateCSRFState("12345678901234567890123456789012:"), "Invalid CSRF state value")
+	assert.NoError(ValidateCSRFState("12345678901234567890123456789012:x"))
+
+	config := getConfigWithLifetime()
+	a := NewAuthenticator(config)
+	r, _ := http.NewRequest("GET", "http://auth.example.com", nil)
+	_, err := a.FindCSRFCookie(r, "short")
+	assert.EqualError(err, "Invalid CSRF state value")
 }
 
 func TestAuthNonce(t *testing.T) {

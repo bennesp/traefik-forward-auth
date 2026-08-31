@@ -267,8 +267,16 @@ func (s *Server) AuthCallbackHandler() http.HandlerFunc {
 		// Logging setup
 		logger := s.logger(r, "default", "Handling callback")
 
+		// Validate state before using its nonce to select the transaction cookie.
+		state := r.URL.Query().Get("state")
+		if err := authentication.ValidateCSRFState(state); err != nil {
+			logger.Errorf("error validating CSRF state: %v", err)
+			http.Error(w, "Not authorized", 401)
+			return
+		}
+
 		// Check for CSRF cookie
-		c, err := r.Cookie(s.config.CSRFCookieName)
+		c, err := s.authenticator.FindCSRFCookie(r, state)
 		if err != nil {
 			logger.Errorf("missing CSRF cookie: %v", err)
 			http.Error(w, "Not authorized", 401)
@@ -276,7 +284,7 @@ func (s *Server) AuthCallbackHandler() http.HandlerFunc {
 		}
 
 		// Validate state
-		valid, redirect, err := authentication.ValidateCSRFCookie(r, c)
+		valid, redirect, err := authentication.ValidateCSRFCookie(c, state)
 		if !valid {
 			logger.Errorf("error validating CSRF cookie: %v", err)
 			http.Error(w, "Not authorized", 401)
@@ -284,7 +292,7 @@ func (s *Server) AuthCallbackHandler() http.HandlerFunc {
 		}
 
 		// Clear CSRF cookie
-		http.SetCookie(w, s.authenticator.ClearCSRFCookie(r))
+		http.SetCookie(w, s.authenticator.ClearCSRFCookie(r, c))
 
 		provider := s.config.OIDCProvider
 
