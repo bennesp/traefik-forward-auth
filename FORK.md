@@ -41,12 +41,12 @@ role described above for `main`.
 Fork releases use this format:
 
 ```text
-v<upstream-version>-bennesp.<revision>
+v<upstream-version>-r<revision>
 ```
 
 For example, the first fork release based on Mesosphere `v3.3.0` is
-`v3.3.0-bennesp.1`. Increment the fork revision for changes that do not move the
-upstream baseline. Start again at `.1` when adopting a new upstream version.
+`v3.3.0-r1`. Increment the fork revision for changes that do not move the
+upstream baseline. Start again at `r1` when adopting a new upstream version.
 
 GitHub Releases build a multi-platform image for `linux/amd64` and
 `linux/arm64`. Deployments should pin the release tag or resulting digest.
